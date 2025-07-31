@@ -79,15 +79,19 @@ class TaskOrchestrator:
             # Use simple agent like in main.py
             agent = OpenRouterAgent(silent=True)
             
+            # Get the model for this specific agent from config
+            model_key = f"model{agent_id + 1}"
+            model = self.config['openrouter'].get(model_key)
+            
             start_time = time.time()
-            response = agent.run(subtask)
+            response = agent.run(subtask, model)
             execution_time = time.time() - start_time
             
             self.update_agent_progress(agent_id, "COMPLETED", response)
             
             return {
                 "agent_id": agent_id,
-                "status": "success", 
+                "status": "success",
                 "response": response,
                 "execution_time": execution_time
             }

@@ -28,13 +28,18 @@ class OpenRouterAgent:
         self.tool_mapping = {name: tool.execute for name, tool in self.discovered_tools.items()}
     
     
-    def call_llm(self, messages):
+    def call_llm(self, messages, model=None):
         """Make OpenRouter API call with tools"""
         try:
             response = self.client.chat.completions.create(
-                model=self.config['openrouter']['model'],
+                model=model or self.config['openrouter']['model'],
                 messages=messages,
-                tools=self.tools
+                tools=self.tools,
+                extra_body={
+                    "provider": {
+                        "sort": "throughput"
+                    }
+                }
             )
             return response
         except Exception as e:
@@ -69,7 +74,7 @@ class OpenRouterAgent:
                 "content": json.dumps({"error": f"Tool execution failed: {str(e)}"})
             }
     
-    def run(self, user_input: str):
+    def run(self, user_input: str, model: str = None):
         """Run the agent with user input and return FULL conversation content"""
         # Initialize messages with system prompt and user input
         messages = [
@@ -95,8 +100,8 @@ class OpenRouterAgent:
             if not self.silent:
                 print(f"🔄 Agent iteration {iteration}/{max_iterations}")
             
-            # Call LLM
-            response = self.call_llm(messages)
+            # Call LLM with specific model if provided
+            response = self.call_llm(messages, model)
             
             # Add the response to messages
             assistant_message = response.choices[0].message

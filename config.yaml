@@ -1,12 +1,18 @@
 # OpenRouter API settings
 openrouter:
-  api_key: "YOUR KEY"
+  api_key: "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"
   base_url: "https://openrouter.ai/api/v1"
   
   # IMPORTANT: When selecting a model, ensure it has a high context window (200k+ tokens recommended)
   # The orchestrator can generate large amounts of results from multiple agents that need to be
   # processed together during synthesis. Low context window models may fail or truncate results.
   model: "moonshotai/kimi-k2"
+  
+  # Individual models for each of the four agents
+  model1: "moonshotai/kimi-k2"
+  model2: "tngtech/deepseek-r1t2-chimera:free"
+  model3: "qwen/qwen3-235b-a22b-thinking-2507"
+  model4: "z-ai/glm-4.5"
 
 # System prompt for the agent
 system_prompt: |
