@@ -29,12 +29,15 @@ class OpenRouterAgent:
     
     
     def call_llm(self, messages, model=None):
-        """Make OpenRouter API call with tools"""
+        """Make OpenRouter API call with tools and conservative generation params to reduce token/cost."""
         try:
             response = self.client.chat.completions.create(
                 model=model or self.config['openrouter']['model'],
                 messages=messages,
                 tools=self.tools,
+                temperature=0.2,
+                max_tokens=self.config.get('openrouter', {}).get('max_tokens', 512),
+                top_p=0.9,
                 extra_body={
                     "provider": {
                         "sort": "throughput"
@@ -75,24 +78,24 @@ class OpenRouterAgent:
             }
     
     def run(self, user_input: str, model: str = None):
-        """Run the agent with user input and return FULL conversation content"""
-        # Initialize messages with system prompt and user input
+        """Run the agent with user input and return FULL conversation content (cost-aware)."""
+        # System prompt trimmed to reduce tokens
+        sys_prompt = self.config.get('system_prompt', '')
+        if len(sys_prompt) > 1200:
+            sys_prompt = sys_prompt[:1200]
+
+        # Initialize messages with system prompt and user input (truncate user input hard)
+        trimmed_user = user_input
+        if len(trimmed_user) > 2000:
+            trimmed_user = trimmed_user[:2000]
+
         messages = [
-            {
-                "role": "system",
-                "content": self.config['system_prompt']
-            },
-            {
-                "role": "user",
-                "content": user_input
-            }
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": trimmed_user}
         ]
         
-        # Track all assistant responses for full content capture
         full_response_content = []
-        
-        # Implement agentic loop from OpenRouter docs
-        max_iterations = self.config.get('agent', {}).get('max_iterations', 10)
+        max_iterations = min(2, self.config.get('agent', {}).get('max_iterations', 10))  # cap to 2 to limit tokens
         iteration = 0
         
         while iteration < max_iterations:
@@ -100,49 +103,42 @@ class OpenRouterAgent:
             if not self.silent:
                 print(f"🔄 Agent iteration {iteration}/{max_iterations}")
             
-            # Call LLM with specific model if provided
             response = self.call_llm(messages, model)
-            
-            # Add the response to messages
             assistant_message = response.choices[0].message
+
+            # Ensure content is not None
+            content_text = assistant_message.content or ""
+            # Trim assistant content to avoid blow-up next round
+            if len(content_text) > 1500:
+                content_text = content_text[:1500]
+
             messages.append({
                 "role": "assistant",
-                "content": assistant_message.content,
+                "content": content_text,
                 "tool_calls": assistant_message.tool_calls
             })
             
-            # Capture assistant content for full response
-            if assistant_message.content:
-                full_response_content.append(assistant_message.content)
+            if content_text:
+                full_response_content.append(content_text)
             
-            # Check if there are tool calls
             if assistant_message.tool_calls:
                 if not self.silent:
                     print(f"🔧 Agent making {len(assistant_message.tool_calls)} tool call(s)")
-                # Handle each tool call
                 task_completed = False
                 for tool_call in assistant_message.tool_calls:
                     if not self.silent:
                         print(f"   📞 Calling tool: {tool_call.function.name}")
                     tool_result = self.handle_tool_call(tool_call)
                     messages.append(tool_result)
-                    
-                    # Check if this was the task completion tool
                     if tool_call.function.name == "mark_task_complete":
                         task_completed = True
                         if not self.silent:
                             print("✅ Task completion tool called - exiting loop")
-                        # Return FULL conversation content, not just completion message
                         return "\n\n".join(full_response_content)
-                
-                # If task was completed, we already returned above
                 if task_completed:
                     return "\n\n".join(full_response_content)
             else:
                 if not self.silent:
                     print("💭 Agent responded without tool calls - continuing loop")
-            
-            # Continue the loop regardless of whether there were tool calls or not
         
-        # If max iterations reached, return whatever content we gathered
-        return "\n\n".join(full_response_content) if full_response_content else "Maximum iterations reached. The agent may be stuck in a loop."
+        return "\n\n".join(full_response_content) if full_response_content else "No content generated."

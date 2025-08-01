@@ -6,11 +6,11 @@ openrouter:
   # IMPORTANT: When selecting a model, ensure it has a high context window (200k+ tokens recommended)
   # The orchestrator can generate large amounts of results from multiple agents that need to be
   # processed together during synthesis. Low context window models may fail or truncate results.
-  model: "moonshotai/kimi-k2"
+  model: "openrouter/horizon-alpha"
   
   # Individual models for each of the four agents
-  model1: "moonshotai/kimi-k2"
-  model2: "tngtech/deepseek-r1t2-chimera:free"
+  model1: "moonshotai/kimi-k2:free"
+  model2: "openrouter/horizon-alpha"
   model3: "qwen/qwen3-235b-a22b-thinking-2507"
   model4: "z-ai/glm-4.5"
 
