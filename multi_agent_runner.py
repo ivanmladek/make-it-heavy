@@ -41,6 +41,7 @@ class MessageChannel:
         return "".join(keep)
 
     def send(self, agent_name: str, turn_index: int, raw_message: str):
+        # Proposal lane bypass remains for final PROPOSE line
         if raw_message.strip().startswith("PROPOSE="):
             capped = raw_message
             noised = raw_message
@@ -237,11 +238,13 @@ class MultiAgentConsoleGame:
         proposal_best: Optional[Dict[str, Any]] = None
 
         for t in range(1, self.turns_total + 1):
-            # Dynamic noise schedule: stabilize early, test robustness later
+            # Dynamic noise schedule: stabilize early, test robustness mid, protect closure late
             if t <= (self.turns_total // 2):
-                self.channel.char_drop_pct = 0.03
+                self.channel.char_drop_pct = 0.03     # early: stabilize
+            elif t <= (self.turns_total - 4):
+                self.channel.char_drop_pct = 0.05     # mid: robustness
             else:
-                self.channel.char_drop_pct = 0.05
+                self.channel.char_drop_pct = 0.02     # late closure: protect finalization
 
             turn_idx = (t - 1) % 4
             agent = self.agents[turn_idx]
