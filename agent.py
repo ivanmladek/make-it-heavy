@@ -29,24 +29,49 @@ class OpenRouterAgent:
     
     
     def call_llm(self, messages, model=None):
-        """Make OpenRouter API call with tools and conservative generation params to reduce token/cost."""
-        try:
-            response = self.client.chat.completions.create(
-                model=model or self.config['openrouter']['model'],
-                messages=messages,
-                tools=self.tools,
-                temperature=0.2,
-                max_tokens=self.config.get('openrouter', {}).get('max_tokens', 512),
-                top_p=0.9,
-                extra_body={
-                    "provider": {
-                        "sort": "throughput"
-                    }
-                }
-            )
-            return response
-        except Exception as e:
-            raise Exception(f"LLM call failed: {str(e)}")
+        """Make OpenRouter API call with tools (no cost guardrails). Return None on failure or slow responses."""
+        import time as _time
+        target_model = model or self.config['openrouter']['model']
+        max_retries = 2
+        backoffs = [0.5, 1.0]
+        start = _time.monotonic()
+        max_wait_seconds = 12.0
+
+        for attempt in range(max_retries + 1):
+            try:
+                response = self.client.chat.completions.create(
+                    model=target_model,
+                    messages=messages,
+                    tools=self.tools,
+                    extra_body={"provider": {"sort": "throughput"}},
+                )
+                # Validate response structure
+                choices = getattr(response, "choices", None)
+                if not choices:
+                    return None
+                first = choices[0]
+                msg = getattr(first, "message", None)
+                if msg is None and isinstance(first, dict):
+                    msg = first.get("message")
+                if msg is None:
+                    return None
+                content = getattr(msg, "content", None)
+                if content is None and isinstance(msg, dict):
+                    content = msg.get("content")
+                if content is None:
+                    return None
+                return response
+            except Exception as e:
+                if not self.silent:
+                    print(f"[LLM ERROR] attempt {attempt+1} failed for model {target_model}: {e}")
+                if attempt < max_retries:
+                    # Check time budget
+                    elapsed = _time.monotonic() - start
+                    if elapsed > max_wait_seconds:
+                        return None
+                    _time.sleep(backoffs[attempt])
+                    continue
+                return None
     
     def handle_tool_call(self, tool_call):
         """Handle a tool call and return the result message"""
@@ -78,67 +103,78 @@ class OpenRouterAgent:
             }
     
     def run(self, user_input: str, model: str = None):
-        """Run the agent with user input and return FULL conversation content (cost-aware)."""
-        # System prompt trimmed to reduce tokens
-        sys_prompt = self.config.get('system_prompt', '')
-        if len(sys_prompt) > 1200:
-            sys_prompt = sys_prompt[:1200]
-
-        # Initialize messages with system prompt and user input (truncate user input hard)
-        trimmed_user = user_input
-        if len(trimmed_user) > 2000:
-            trimmed_user = trimmed_user[:2000]
-
+        """Run the agent with user input and return FULL conversation content (no guardrails, resilient to provider errors)."""
         messages = [
-            {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": trimmed_user}
+            {"role": "system", "content": self.config.get('system_prompt', '')},
+            {"role": "user", "content": user_input}
         ]
-        
         full_response_content = []
-        max_iterations = min(2, self.config.get('agent', {}).get('max_iterations', 10))  # cap to 2 to limit tokens
+        max_iterations = self.config.get('agent', {}).get('max_iterations', 10)
         iteration = 0
-        
+        fallback = "ACK"
+
         while iteration < max_iterations:
             iteration += 1
             if not self.silent:
                 print(f"🔄 Agent iteration {iteration}/{max_iterations}")
-            
-            response = self.call_llm(messages, model)
-            assistant_message = response.choices[0].message
 
-            # Ensure content is not None
-            content_text = assistant_message.content or ""
-            # Trim assistant content to avoid blow-up next round
-            if len(content_text) > 1500:
-                content_text = content_text[:1500]
+            response = self.call_llm(messages, model)
+            if response is None:
+                # Provider error or malformed; append minimal fallback to keep the game flowing
+                messages.append({"role": "assistant", "content": fallback})
+                full_response_content.append(fallback)
+                break
+
+            # Extract assistant message robustly
+            first = response.choices[0]
+            assistant_message = getattr(first, "message", None)
+            if assistant_message is None and isinstance(first, dict):
+                assistant_message = first.get("message", {})
+
+            # Content and tool calls with defensive access
+            if isinstance(assistant_message, dict):
+                content_text = assistant_message.get("content", "") or ""
+                tool_calls = assistant_message.get("tool_calls", []) or []
+            else:
+                content_text = getattr(assistant_message, "content", "") or ""
+                tool_calls = getattr(assistant_message, "tool_calls", []) or []
 
             messages.append({
                 "role": "assistant",
                 "content": content_text,
-                "tool_calls": assistant_message.tool_calls
+                "tool_calls": tool_calls
             })
-            
             if content_text:
                 full_response_content.append(content_text)
-            
-            if assistant_message.tool_calls:
+
+            if tool_calls:
                 if not self.silent:
-                    print(f"🔧 Agent making {len(assistant_message.tool_calls)} tool call(s)")
+                    try:
+                        print(f"🔧 Agent making {len(tool_calls)} tool call(s)")
+                    except Exception:
+                        print("🔧 Agent making tool call(s)")
                 task_completed = False
-                for tool_call in assistant_message.tool_calls:
-                    if not self.silent:
-                        print(f"   📞 Calling tool: {tool_call.function.name}")
+                for tool_call in tool_calls:
+                    try:
+                        tool_name = getattr(tool_call.function, "name", None)
+                    except Exception:
+                        tool_name = None
+                    if not self.silent and tool_name:
+                        print(f"   📞 Calling tool: {tool_name}")
                     tool_result = self.handle_tool_call(tool_call)
                     messages.append(tool_result)
-                    if tool_call.function.name == "mark_task_complete":
+                    if tool_name == "mark_task_complete":
                         task_completed = True
                         if not self.silent:
                             print("✅ Task completion tool called - exiting loop")
-                        return "\n\n".join(full_response_content)
+                        return "\n\n".join(full_response_content) if full_response_content else ""
                 if task_completed:
-                    return "\n\n".join(full_response_content)
+                    return "\n\n".join(full_response_content) if full_response_content else ""
             else:
                 if not self.silent:
                     print("💭 Agent responded without tool calls - continuing loop")
-        
-        return "\n\n".join(full_response_content) if full_response_content else "No content generated."
+
+            # For this orchestrated usage, we only need the first assistant turn
+            break
+
+        return "\n\n".join(full_response_content) if full_response_content else fallback

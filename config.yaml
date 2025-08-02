@@ -9,9 +9,9 @@ openrouter:
   model: "openrouter/horizon-alpha"
   
   # Individual models for each of the four agents
-  model1: "moonshotai/kimi-k2:free"
+  model1: "moonshotai/kimi-k2"
   model2: "openrouter/horizon-alpha"
-  model3: "qwen/qwen3-235b-a22b-thinking-2507"
+  model3: "qwen/qwen3-coder:free"
   model4: "z-ai/glm-4.5"
 
 # System prompt for the agent
