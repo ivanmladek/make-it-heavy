@@ -203,6 +203,32 @@ class MultiAgentConsoleGame:
             3: "ROLE=Proposer/Closer",
         }
         role_hint = role_map.get(idx, "")
+        late_emphasis = (
+            "- Late-turn emphasis (turns 20–22): Focus only on ONE unknown slot; do not restate known slots except to confirm a change.\n"
+            "- Near-final check (turns 20–22): emit a compact table with status tags [OK/UNK/REVISE]:\n"
+            "  TABLE: A1.C=?, A1.S=?, A2.C=?, A2.S=?, B1.C=?, B1.S=?, B2.C=?, B2.S=?\n"
+            "  Then push the Closer to issue PREPARE_PROPOSAL on the next turn and final PROPOSE= after that.\n"
+        )
+        pre_proposal_contract = (
+            "Proposal contract:\n"
+            "- Before issuing PROPOSE=, the Proposer/Closer must verify:\n"
+            "  * All 8 slots listed with status [OK] (no UNK/REVISE).\n"
+            "  * Each slot has TWO independent confirmations (not counting the original proposer).\n"
+            "- Use PREPARE_PROPOSAL={...} one turn BEFORE the final proposal (this line will be noised).\n"
+            "- On the NEXT turn, issue the final PROPOSE= JSON (this line is un-noised and must be the only content on the line).\n"
+        )
+        one_slot_assignments = (
+            "One-slot repair loop (when ≥6/8 slots are [OK]):\n"
+            "- Assign responsibilities explicitly for the remaining unknowns, e.g.:\n"
+            "  * Agent2: provide best evidence for B2.S\n"
+            "  * Agent3: request/confirm B2.S from Agent2\n"
+            "  * Agent1: recheck table and mark B2.S [OK/REVISE]\n"
+            "  * Agent4 (Closer): prepare PREPARE_PROPOSAL if all [OK] next turn\n"
+        )
+        mid_game_feedback = (
+            "Mid-game feedback rule:\n"
+            "- After any PREPARE_PROPOSAL or malformed PROPOSE, reflect explicitly on the very next turn which slots are correct/incorrect in plain language, then update the table and proceed with the one-slot repair loop.\n"
+        )
         return (
             f"{self.public_brief}\n"
             f"{role_hint}\n"
@@ -217,12 +243,12 @@ class MultiAgentConsoleGame:
             "- Turn budgeting:\n"
             "  * Early (turns 1–6): dump private facts compactly.\n"
             "  * Mid (turns 7–16): consolidate + confirm; focus only on Unknown list.\n"
-            "  * Late (turns 17+): if ≥7/8 known, Closer attempts PROPOSE=; else focus one-slot-per-turn.\n"
-            "- Late-turn emphasis (turns 20–22): Focus only on ONE unknown slot; do not restate known slots except to confirm a change.\n"
-            "- Near-final check (turns 20–22): emit a compact table with status tags [OK/UNK/REVISE]:\n"
-            "  TABLE: A1.C=?, A1.S=?, A2.C=?, A2.S=?, B1.C=?, B1.S=?, B2.C=?, B2.S=?\n"
-            "  Then push the Closer to issue PROPOSE=.\n"
+            "  * Late (turns 17+): if ≥7/8 known, Closer attempts PREPARE_PROPOSAL then PROPOSE=; else focus one-slot-per-turn.\n"
             "- After any proposal (even partial), reflect back slotwise correctness as DELTA corrections next turn.\n"
+            f"{late_emphasis}"
+            f"{one_slot_assignments}"
+            f"{pre_proposal_contract}"
+            f"{mid_game_feedback}"
             "- When enough info is shared, output a single PROPOSE=... JSON line with no extra text.\n"
             + lock_hint
         )
@@ -244,7 +270,7 @@ class MultiAgentConsoleGame:
             elif t <= (self.turns_total - 4):
                 self.channel.char_drop_pct = 0.05     # mid: robustness
             else:
-                self.channel.char_drop_pct = 0.02     # late closure: protect finalization
+                self.channel.char_drop_pct = 0.01     # late closure: ultra-low noise for confirmations/proposals
 
             turn_idx = (t - 1) % 4
             agent = self.agents[turn_idx]
