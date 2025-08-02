@@ -4,7 +4,9 @@ import time
 import random
 import string
 import yaml
-from typing import List, Dict, Any, Optional
+import re
+from typing import List, Dict, Any, Optional, Tuple, Set, DefaultDict
+from collections import defaultdict
 from agent import OpenRouterAgent
 from orchestrator import TaskOrchestrator
 
@@ -104,6 +106,28 @@ class InfoSharingEnvironment:
         chosen_shapes = self.rng.sample(self.SHAPES, 4)
         for idx, cell in enumerate(self.CELLS):
             self.solution[cell] = {"Color": chosen_colors[idx], "Shape": chosen_shapes[idx]}
+        # Canonicalization maps (edit-distance-1/common typos)
+        self.color_alias = {
+            "Yelow": "Yellow",
+            "Ble": "Blue",
+            "Gree": "Green",
+            "Gren": "Green",
+            "Blu": "Blue",
+            "Redd": "Red",
+            "Rd": "Red",
+        }
+        self.shape_alias = {
+            "Sqare": "Square",
+            "Suare": "Square",
+            "Tri": "Triangle",
+            "Triange": "Triangle",
+            "Trangle": "Triangle",
+            "Tiagle": "Triangle",
+            "Hexagn": "Hexagon",
+            "Hexagone": "Hexagon",
+            "Circl": "Circle",
+            "Circlee": "Circle",
+        }
 
     def sample_private_facts(self, n_agents: int = 4) -> List[List[str]]:
         facts: List[str] = []
@@ -131,6 +155,17 @@ class InfoSharingEnvironment:
             "PROPOSE={\"A1\":{\"Color\":\"...\",\"Shape\":\"...\"},\"A2\":{...},\"B1\":{...},\"B2\":{...}}\n"
         )
 
+    def _canon_value(self, slot: str, value: str) -> Optional[str]:
+        if slot.endswith(".C") or slot == "Color":
+            if value in self.COLORS:
+                return value
+            return self.color_alias.get(value, None)
+        if slot.endswith(".S") or slot == "Shape":
+            if value in self.SHAPES:
+                return value
+            return self.shape_alias.get(value, None)
+        return value
+
     def is_valid_proposal(self, text: str) -> Optional[Dict[str, Any]]:
         marker = "PROPOSE="
         idx = text.find(marker)
@@ -148,6 +183,13 @@ class InfoSharingEnvironment:
                 return None
             if "Color" not in obj[cell] or "Shape" not in obj[cell]:
                 return None
+            # Canonicalize proposal enums if they are aliasable
+            col = obj[cell].get("Color")
+            shp = obj[cell].get("Shape")
+            col_c = self._canon_value("Color", col) or col
+            shp_c = self._canon_value("Shape", shp) or shp
+            obj[cell]["Color"] = col_c
+            obj[cell]["Shape"] = shp_c
         return obj
 
     def score_proposal(self, proposal: Dict[str, Any]) -> float:
@@ -178,6 +220,19 @@ class MultiAgentConsoleGame:
         self.schema_locked = False
         self.schema_votes = 0
         self.canonical_schema = "A1.C,A1.S|A2.C,A2.S|B1.C,B1.S|B2.C,B2.S"
+
+        # Server-side canonical state and confirmation tracking
+        # canonical_state: slot -> value (e.g., "A1.C" -> "Green")
+        self.canonical_state: Dict[str, Optional[str]] = {
+            f"{cell}.C": None for cell in self.env.CELLS
+        }
+        self.canonical_state.update({f"{cell}.S": None for cell in self.env.CELLS})
+        # confirmations: slot -> value -> set of agent names confirming
+        self.confirmations: DefaultDict[str, DefaultDict[str, Set[str]]] = defaultdict(lambda: defaultdict(set))
+        # shadow candidate from PREPARE_* detection
+        self.shadow_candidate: Optional[Dict[str, Any]] = None
+        # last machine feedback to include in prompts
+        self.last_feedback: str = ""
 
     def _maybe_lock_schema(self, text: str):
         if "SCHEMA" in text.upper():
@@ -229,11 +284,43 @@ class MultiAgentConsoleGame:
             "Mid-game feedback rule:\n"
             "- After any PREPARE_PROPOSAL or malformed PROPOSE, reflect explicitly on the very next turn which slots are correct/incorrect in plain language, then update the table and proceed with the one-slot repair loop.\n"
         )
+        # Compose CANONICAL_STATE and QUORUM_STATUS blocks for stronger closure pressure
+        canonical_lines = []
+        for cell in self.env.CELLS:
+            c = self.canonical_state[f"{cell}.C"] or "?"
+            s = self.canonical_state[f"{cell}.S"] or "?"
+            canonical_lines.append(f"{cell}.C={c} | {cell}.S={s}")
+        canonical_block = "CANONICAL_STATE:\n" + "\n".join(canonical_lines)
+
+        quorum_lines = []
+        for cell in self.env.CELLS:
+            for attr, key in [("Color", f"{cell}.C"), ("Shape", f"{cell}.S")]:
+                cur = self.canonical_state[key]
+                if cur:
+                    count = len(self.confirmations[key][cur])
+                    quorum_lines.append(f"{key}={cur} quorum={count}")
+                else:
+                    quorum_lines.append(f"{key}=? quorum=0")
+        quorum_block = "QUORUM_STATUS:\n" + "\n".join(quorum_lines)
+
+        forced_finalization_hint = ""
+        if self._quorum_all_met():
+            forced_finalization_hint = "\nFORCED_FINALIZATION: All quorums met. If you are Agent4 on turn 23, you MUST issue the final PROPOSE= JSON exactly as per canonical state.\n"
+
+        # Create machine feedback string separately to avoid backslash issue in f-string
+        if self.last_feedback:
+            machine_feedback = "MACHINE_FEEDBACK:\n" + self.last_feedback + "\n\n"
+        else:
+            machine_feedback = ""
+            
         return (
             f"{self.public_brief}\n"
             f"{role_hint}\n"
             f"YOUR PRIVATE FACTS:\n{facts}\n\n"
             f"TRANSCRIPT SO FAR (noised):\n{history if history else '(none)'}\n\n"
+            f"{canonical_block}\n\n"
+            f"{quorum_block}\n\n"
+            f"{machine_feedback}"
             "Guidance:\n"
             "- Only state NEW or CORRECTED facts; avoid repeating unchanged items.\n"
             "- Use compact schema (A1.C=Red | B2.S=Star). Use '|' as a separator.\n"
@@ -250,15 +337,174 @@ class MultiAgentConsoleGame:
             f"{pre_proposal_contract}"
             f"{mid_game_feedback}"
             "- When enough info is shared, output a single PROPOSE=... JSON line with no extra text.\n"
-            + lock_hint
+            f"{lock_hint}"
+            f"{forced_finalization_hint}"
         )
 
     def _extract_first_line(self, text: str) -> str:
         return (text or "").strip()
 
+    # === New helpers: parsing, canonicalization, quorum, and feedback ===
+
+    def _parse_claims_and_confirms(self, speaker: str, text: str) -> List[Tuple[str, str, str]]:
+        """
+        Parse claims and confirmations in compact form:
+        - Direct claim: A1.C=Green or A2.S=Circle
+        - Confirmation: CONFIRM A1.C=Green
+        Returns list of (kind, slot, value) where kind in {"CLAIM","CONFIRM"}.
+        """
+        results: List[Tuple[str, str, str]] = []
+        if not text:
+            return results
+        # Normalize whitespace
+        t = text.replace("\n", " ")
+        # Confirmations
+        for m in re.finditer(r"\bCONFIRM\s+([AB][12])\.(C|S)\s*=\s*([A-Za-z]+)", t, flags=re.IGNORECASE):
+            cell, attr, val = m.group(1).upper(), m.group(2).upper(), m.group(3)
+            slot = f"{cell}.{attr}"
+            val = val.capitalize()
+            canon = self.env._canon_value(slot, val)
+            if canon:
+                results.append(("CONFIRM", slot, canon))
+        # Direct claims (avoid matching inside CONFIRM we already captured)
+        for m in re.finditer(r"\b([AB][12])\.(C|S)\s*=\s*([A-Za-z]+)", t):
+            cell, attr, val = m.group(1).upper(), m.group(2).upper(), m.group(3)
+            slot = f"{cell}.{attr}"
+            val = val.capitalize()
+            canon = self.env._canon_value(slot, val)
+            if canon:
+                results.append(("CLAIM", slot, canon))
+        return results
+
+    def _update_canonical_and_quorum(self, speaker: str, parsed: List[Tuple[str, str, str]]):
+        for kind, slot, value in parsed:
+            if kind == "CLAIM":
+                # adopt claim as tentative canonical if empty; don't override a different non-empty value
+                if self.canonical_state.get(slot) is None:
+                    self.canonical_state[slot] = value
+            elif kind == "CONFIRM":
+                self.confirmations[slot][value].add(speaker)
+                # ensure canonical aligns to the most-confirmed value
+                current = self.canonical_state.get(slot)
+                if current is None:
+                    self.canonical_state[slot] = value
+                else:
+                    # if confirmations favor another value, switch
+                    counts = {val: len(peers) for val, peers in self.confirmations[slot].items()}
+                    best_val = max(counts.items(), key=lambda x: x[1])[0]
+                    if best_val != current and counts[best_val] >= 2:
+                        self.canonical_state[slot] = best_val
+
+    def _quorum_for_slot(self, slot: str) -> int:
+        val = self.canonical_state.get(slot)
+        if not val:
+            return 0
+        return len(self.confirmations[slot][val])
+
+    def _quorum_all_met(self) -> bool:
+        for cell in self.env.CELLS:
+            for key in (f"{cell}.C", f"{cell}.S"):
+                if self._quorum_for_slot(key) < 2:
+                    return False
+        return True
+
+    def _parse_table_update(self, text: str):
+        """
+        Parse TABLE lines like:
+        TABLE: A1.C=Green [OK], A1.S=Square [OK], ...
+        Update canonical_state when [OK] is present.
+        """
+        if "TABLE:" not in text:
+            return
+        line = text.split("TABLE:", 1)[1]
+        # Split on commas
+        parts = re.split(r"[,\n]+", line)
+        for p in parts:
+            m = re.search(r"\b([AB][12])\.(C|S)\s*=\s*([A-Za-z]+)\s*\[(OK|UNK|REVISE)\]", p, flags=re.IGNORECASE)
+            if not m:
+                continue
+            cell, attr, val, status = m.group(1).upper(), m.group(2).upper(), m.group(3), m.group(4).upper()
+            slot = f"{cell}.{attr}"
+            val = val.capitalize()
+            canon = self.env._canon_value(slot, val)
+            if canon and status == "OK":
+                # adopt as canonical and treat as an implicit confirmation by "TABLE"
+                self.canonical_state[slot] = canon
+                self.confirmations[slot][canon].add("TABLE")
+
+    def _detect_prepare_candidate(self, text: str) -> Optional[Dict[str, Any]]:
+        """
+        Detect PREPARE_* lines with fuzzy prefix and try to extract JSON payload if present.
+        Accepts variants like PREPAREPROPOSAL, PREPARE_PROPOSAL, PREPARE-PROPOSAL, PREPARE_POPOSAL, etc.
+        """
+        if not text:
+            return None
+        if re.search(r"\bPREPARE[-_ ]?PROPOSAL", text, flags=re.IGNORECASE) is None:
+            return None
+        m = re.search(r"\{.*\}", text, flags=re.DOTALL)
+        if not m:
+            return None
+        try:
+            obj = json.loads(m.group(0))
+        except Exception:
+            return None
+        # Canonicalize if possible
+        try:
+            for cell in self.env.CELLS:
+                if cell in obj and isinstance(obj[cell], dict):
+                    c = obj[cell].get("Color")
+                    s = obj[cell].get("Shape")
+                    c2 = self.env._canon_value("Color", c) or c
+                    s2 = self.env._canon_value("Shape", s) or s
+                    obj[cell]["Color"] = c2
+                    obj[cell]["Shape"] = s2
+        except Exception:
+            pass
+        return obj
+
+    def _machine_feedback_after_prepare_or_malformed(self, candidate: Optional[Dict[str, Any]]):
+        """
+        Produce slot-by-slot correctness and quorum needs.
+        """
+        lines = []
+        if candidate:
+            lines.append("Feedback on PREPARE_PROPOSAL candidate:")
+            score = self.env.score_proposal(candidate)
+            lines.append(f"- Candidate score vs solution: {score*100:.1f}%")
+            for cell in self.env.CELLS:
+                want_c = self.env.solution[cell]["Color"]
+                want_s = self.env.solution[cell]["Shape"]
+                got_c = candidate.get(cell, {}).get("Color")
+                got_s = candidate.get(cell, {}).get("Shape")
+                lines.append(f"  {cell}.C: want={want_c} got={got_c} -> {'OK' if want_c==got_c else 'REVISE'}")
+                lines.append(f"  {cell}.S: want={want_s} got={got_s} -> {'OK' if want_s==got_s else 'REVISE'}")
+        else:
+            lines.append("Malformed PROPOSE detected or PREPARE without JSON; focusing repair.")
+        # Quorum needs
+        needs = []
+        for cell in self.env.CELLS:
+            for key in (f"{cell}.C", f"{cell}.S"):
+                val = self.canonical_state.get(key)
+                q = self._quorum_for_slot(key)
+                if val and q < 2:
+                    # find who hasn't confirmed yet
+                    confirmers = self.confirmations[key][val]
+                    missing = [n for n in self.names if n not in confirmers]
+                    needs.append((key, val, q, missing))
+        if needs:
+            lines.append("Quorum needs (require 2 independent confirmations per slot):")
+            for key, val, q, missing in needs:
+                # Prefer next agent by turn order, but we list candidates
+                lines.append(f"- Need confirmation for {key}={val} (quorum={q}). Candidates: {', '.join(missing)}")
+        else:
+            lines.append("All quorums satisfied; ready for final PROPOSE on Agent4 turn 23.")
+        self.last_feedback = "\n".join(lines)
+
     def play(self):
         print("=== Information Sharing and Integration: Console Game ===")
         print("Relaxed bandwidth/noise and extended turns to encourage emergent protocol formation.\n")
+        # Reset machine feedback at start
+        self.last_feedback = ""
 
         proposal_best_score = 0.0
         proposal_best: Optional[Dict[str, Any]] = None
@@ -280,13 +526,36 @@ class MultiAgentConsoleGame:
             user_prompt = self._build_prompt_for_agent(turn_idx)
             reply_full = agent.run(user_prompt, model=model)
             reply_line = self._extract_first_line(reply_full)
+            # Parse TABLE to update canonical state
+            self._parse_table_update(reply_line)
+            # Parse claims and confirmations; update quorum/canonical
+            parsed = self._parse_claims_and_confirms(name, reply_line)
+            self._update_canonical_and_quorum(name, parsed)
 
             self._maybe_lock_schema(reply_line)
             self.channel.send(name, t, reply_line)
 
+            # Detect PREPARE_* candidate or malformed PROPOSE to generate machine feedback
+            prepare_obj = self._detect_prepare_candidate(reply_line)
+            propose_obj = self.env.is_valid_proposal(reply_line) or self.env.is_valid_proposal(self.channel.transcript[-1]["noised"])
+            malformed_propose = (("PROPOSE=" in reply_line) and (propose_obj is None))
+            if prepare_obj is not None:
+                self.shadow_candidate = prepare_obj
+                self._machine_feedback_after_prepare_or_malformed(self.shadow_candidate)
+            elif malformed_propose:
+                self._machine_feedback_after_prepare_or_malformed(None)
+            else:
+                # Clear feedback unless we are still missing quorum
+                if not self._quorum_all_met():
+                    # maintain last feedback to keep pressure
+                    pass
+                else:
+                    self.last_feedback = ""
+
             last_entry = self.channel.transcript[-1]
             candidate = self.env.is_valid_proposal(last_entry["raw"]) or self.env.is_valid_proposal(last_entry["noised"])
-            if candidate:
+            # Enforce quorum: accept proposal only if quorum satisfied for all slots
+            if candidate and self._quorum_all_met():
                 score = self.env.score_proposal(candidate)
                 if score >= proposal_best_score:
                     proposal_best_score = score
@@ -294,6 +563,13 @@ class MultiAgentConsoleGame:
                 if score == 1.0:
                     print("\nPerfect proposal received. Ending early.\n")
                     break
+            elif candidate and not self._quorum_all_met():
+                # Reject proposal silently but produce targeted feedback
+                self._machine_feedback_after_prepare_or_malformed(candidate)
+
+            # Forced finalization directive: if by end of turn 22 quorums are met, force Agent4 to propose on 23
+            if t == 22 and self._quorum_all_met():
+                self.last_feedback = "All slots have quorum≥2. Agent4 must issue final PROPOSE= JSON on next turn using CANONICAL_STATE exactly."
 
         print("\n=== Round Complete ===\n")
         print("Transcript:")
