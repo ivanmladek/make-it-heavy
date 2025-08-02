@@ -229,10 +229,14 @@ class MultiAgentConsoleGame:
         self.canonical_state.update({f"{cell}.S": None for cell in self.env.CELLS})
         # confirmations: slot -> value -> set of agent names confirming
         self.confirmations: DefaultDict[str, DefaultDict[str, Set[str]]] = defaultdict(lambda: defaultdict(set))
+        # confidence tracking: slot -> value -> confidence score
+        self.confidence: DefaultDict[str, DefaultDict[str, float]] = defaultdict(lambda: defaultdict(float))
         # shadow candidate from PREPARE_* detection
         self.shadow_candidate: Optional[Dict[str, Any]] = None
         # last machine feedback to include in prompts
         self.last_feedback: str = ""
+        # track agent reliability for weighting confirmations
+        self.agent_reliability: Dict[str, float] = {name: 1.0 for name in self.names}
 
     def _maybe_lock_schema(self, text: str):
         if "SCHEMA" in text.upper():
@@ -298,9 +302,10 @@ class MultiAgentConsoleGame:
                 cur = self.canonical_state[key]
                 if cur:
                     count = len(self.confirmations[key][cur])
-                    quorum_lines.append(f"{key}={cur} quorum={count}")
+                    conf = self.confidence[key][cur]
+                    quorum_lines.append(f"{key}={cur} quorum={count} confidence={conf:.2f}")
                 else:
-                    quorum_lines.append(f"{key}=? quorum=0")
+                    quorum_lines.append(f"{key}=? quorum=0 confidence=0.00")
         quorum_block = "QUORUM_STATUS:\n" + "\n".join(quorum_lines)
 
         forced_finalization_hint = ""
@@ -313,6 +318,12 @@ class MultiAgentConsoleGame:
         else:
             machine_feedback = ""
             
+        # Create agent reliability block
+        reliability_lines = []
+        for agent in self.names:
+            reliability_lines.append(f"{agent}: {self.agent_reliability[agent]:.2f}")
+        reliability_block = "AGENT_RELIABILITY:\n" + "\n".join(reliability_lines)
+            
         return (
             f"{self.public_brief}\n"
             f"{role_hint}\n"
@@ -320,6 +331,7 @@ class MultiAgentConsoleGame:
             f"TRANSCRIPT SO FAR (noised):\n{history if history else '(none)'}\n\n"
             f"{canonical_block}\n\n"
             f"{quorum_block}\n\n"
+            f"{reliability_block}\n\n"
             f"{machine_feedback}"
             "Guidance:\n"
             "- Only state NEW or CORRECTED facts; avoid repeating unchanged items.\n"
@@ -382,16 +394,22 @@ class MultiAgentConsoleGame:
                 # adopt claim as tentative canonical if empty; don't override a different non-empty value
                 if self.canonical_state.get(slot) is None:
                     self.canonical_state[slot] = value
+                    # Initialize confidence for new claims
+                    self.confidence[slot][value] = 0.5 * self.agent_reliability[speaker]
             elif kind == "CONFIRM":
                 self.confirmations[slot][value].add(speaker)
-                # ensure canonical aligns to the most-confirmed value
+                # Update confidence based on agent reliability
+                self.confidence[slot][value] += 0.3 * self.agent_reliability[speaker]
+                
+                # ensure canonical aligns to the most-confirmed value with highest confidence
                 current = self.canonical_state.get(slot)
                 if current is None:
                     self.canonical_state[slot] = value
                 else:
                     # if confirmations favor another value, switch
                     counts = {val: len(peers) for val, peers in self.confirmations[slot].items()}
-                    best_val = max(counts.items(), key=lambda x: x[1])[0]
+                    # Consider both count and confidence when determining best value
+                    best_val = max(counts.items(), key=lambda x: (x[1], self.confidence[slot][x[0]]))[0]
                     if best_val != current and counts[best_val] >= 2:
                         self.canonical_state[slot] = best_val
 
@@ -401,10 +419,17 @@ class MultiAgentConsoleGame:
             return 0
         return len(self.confirmations[slot][val])
 
+    def _confidence_for_slot(self, slot: str) -> float:
+        val = self.canonical_state.get(slot)
+        if not val:
+            return 0.0
+        return self.confidence[slot][val]
+
     def _quorum_all_met(self) -> bool:
         for cell in self.env.CELLS:
             for key in (f"{cell}.C", f"{cell}.S"):
-                if self._quorum_for_slot(key) < 2:
+                # Require both quorum count >= 2 and confidence >= 0.8
+                if self._quorum_for_slot(key) < 2 or self._confidence_for_slot(key) < 0.8:
                     return False
         return True
 
@@ -486,19 +511,30 @@ class MultiAgentConsoleGame:
             for key in (f"{cell}.C", f"{cell}.S"):
                 val = self.canonical_state.get(key)
                 q = self._quorum_for_slot(key)
-                if val and q < 2:
+                conf = self._confidence_for_slot(key)
+                if val and (q < 2 or conf < 0.8):
                     # find who hasn't confirmed yet
                     confirmers = self.confirmations[key][val]
                     missing = [n for n in self.names if n not in confirmers]
-                    needs.append((key, val, q, missing))
+                    needs.append((key, val, q, conf, missing))
         if needs:
-            lines.append("Quorum needs (require 2 independent confirmations per slot):")
-            for key, val, q, missing in needs:
+            lines.append("Quorum/Confidence needs (require 2 independent confirmations per slot, confidence >= 0.8):")
+            for key, val, q, conf, missing in needs:
                 # Prefer next agent by turn order, but we list candidates
-                lines.append(f"- Need confirmation for {key}={val} (quorum={q}). Candidates: {', '.join(missing)}")
+                lines.append(f"- Need confirmation for {key}={val} (quorum={q}, confidence={conf:.2f}). Candidates: {', '.join(missing)}")
         else:
-            lines.append("All quorums satisfied; ready for final PROPOSE on Agent4 turn 23.")
+            lines.append("All quorums and confidence thresholds satisfied; ready for final PROPOSE on Agent4 turn 23.")
         self.last_feedback = "\n".join(lines)
+
+    def _update_agent_reliability(self, agent_name: str, proposal_score: float):
+        """
+        Update agent reliability based on proposal score.
+        """
+        # Simple update rule: if score is high, increase reliability; if low, decrease
+        if proposal_score >= 0.9:
+            self.agent_reliability[agent_name] = min(1.0, self.agent_reliability[agent_name] + 0.1)
+        elif proposal_score <= 0.5:
+            self.agent_reliability[agent_name] = max(0.1, self.agent_reliability[agent_name] - 0.1)
 
     def play(self):
         print("=== Information Sharing and Integration: Console Game ===")
@@ -557,6 +593,8 @@ class MultiAgentConsoleGame:
             # Enforce quorum: accept proposal only if quorum satisfied for all slots
             if candidate and self._quorum_all_met():
                 score = self.env.score_proposal(candidate)
+                # Update agent reliability based on proposal score
+                self._update_agent_reliability(name, score)
                 if score >= proposal_best_score:
                     proposal_best_score = score
                     proposal_best = candidate
@@ -576,6 +614,9 @@ class MultiAgentConsoleGame:
         print(self.channel.get_history_text())
         print("\nChannel stats:")
         print(json.dumps(self.channel.stats(), indent=2))
+        print("\nAgent reliability scores:")
+        for agent, score in self.agent_reliability.items():
+            print(f"  {agent}: {score:.2f}")
 
         if proposal_best is not None:
             print("\nBest proposal received:")
