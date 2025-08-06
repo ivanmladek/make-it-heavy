@@ -62,54 +62,38 @@ graph TD
     A[Game Initialization] --> B[Create Hidden Grid]
     B --> C[Generate Private Facts]
     C --> D[Initialize Agents & Channel]
+    D --> E[Start Round-Robin Loop]
     
-    D --> E[Turn 1: Agent 1]
-    E --> F[Build Prompt with History]
-    F --> G[Agent 1 Responds]
-    G --> H[Parse Claims & Confirmations]
-    H --> I[Update Canonical State]
-    I --> J[Check for Proposals]
+    E --> F[Select Next Agent]
+    F --> G[Build Prompt with History]
+    G --> H[Agent Responds]
+    H --> I[Parse Claims & Confirmations]
+    I --> J[Update Canonical State]
+    J --> K[Check for Proposals]
     
-    J --> K[Turn 2: Agent 2]
-    K --> L[Build Prompt with History]
-    L --> M[Agent 2 Responds]
-    M --> N[Parse Claims & Confirmations]
-    N --> O[Update Canonical State]
-    O --> P[Check for Proposals]
+    K --> L{Proposal Valid & Quorum Met?}
+    L -->|Yes| M[Score Proposal]
+    L -->|No| N[Check Turn Limit]
     
-    P --> Q[Turn 3: Agent 3]
-    Q --> R[Build Prompt with History]
-    R --> S[Agent 3 Responds]
-    S --> T[Parse Claims & Confirmations]
-    T --> U[Update Canonical State]
-    U --> V[Check for Proposals]
+    M --> O[Update Agent Reliability]
+    O --> P{Perfect Score?}
+    P -->|Yes| Q[End Game Early]
+    P -->|No| R[Continue to Next Turn]
     
-    V --> W[Turn 4: Agent 4]
-    W --> X[Build Prompt with History]
-    X --> Y[Agent 4 Responds]
-    Y --> Z[Parse Claims & Confirmations]
-    Z --> AA[Update Canonical State]
-    AA --> AB[Check for Proposals]
+    N --> S{Max Turns Reached?}
+    S -->|Yes| T[End Game]
+    S -->|No| R[Continue to Next Turn]
     
-    AB --> AC[Continue Round-Robin]
-    AC --> AD[... Additional Turns ...]
+    R --> U[Update Turn Counter]
+    U --> F
     
-    AD --> AE{Proposal Valid & Quorum Met?}
-    AE -->|Yes| AF[Score Proposal]
-    AE -->|No| AG[Continue Game Loop]
+    Q --> V[Generate Final Report]
+    T --> V
     
-    AF --> AH[Update Agent Reliability]
-    AH --> AI[Check for Perfect Score]
-    AI -->|1.0| AJ[End Game Early]
-    AI -->|< 1.0| AK[Continue to Max Turns]
-    
-    AJ --> AL[Generate Final Report]
-    AK --> AL
-    
-    AL --> AM[Display Transcript]
-    AL --> AN[Show Channel Stats]
-    AL --> AO[Present Best Proposal]
-    AL --> AP[Synthesize Report]
+    V --> W[Display Transcript]
+    V --> X[Show Channel Stats]
+    V --> Y[Present Best Proposal]
+    V --> Z[Synthesize Report]
 ```
 ## AI Models Used
 
