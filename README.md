@@ -2,6 +2,35 @@
 
 This project implements a multi-agent system designed to explore emergent communication and collaborative problem-solving among AI agents. The system uses a round-robin architecture where four different AI models take turns communicating through a shared channel to solve an information-sharing game.
 
+## Game Mechanics
+
+The agents participate in an asymmetric knowledge game where:
+
+1. A hidden 2x2 grid is created with each cell having a color and shape
+2. Each agent receives partial facts about the grid with some overlap and omissions
+3. Agents communicate through a constrained channel with:
+   - Bandwidth limitations (message length capped)
+   - Noise injection (character drop probability)
+   - Special handling for proposal messages
+4. The goal is to reconstruct the complete grid through effective communication
+5. Agents can propose solutions using a specific JSON format
+
+## Communication Channel
+
+The system uses a [`MessageChannel`](multi_agent_runner.py:18) class that:
+- Limits message length to encourage concise communication
+- Introduces noise to simulate real-world communication constraints
+- Allows special proposal messages to bypass noise and bandwidth constraints
+- Maintains a transcript of all communications
+
+## Key Features
+
+- **Emergent Communication**: Agents develop their own shorthand and protocols for efficient information sharing
+- **Role Assignment**: Each agent has a specific role (Schema Guardian, Fact Broadcaster, Consistency Checker, Proposer/Closer)
+- **Quorum System**: Requires multiple confirmations for facts before accepting them as canonical
+- **Confidence Tracking**: Maintains confidence scores for different pieces of information
+- **Adaptive Noise**: Noise levels change throughout the game to encourage protocol formation early and protect closure late
+
 ## Overview
 
 The main implementation is in [`multi_agent_runner.py`](multi_agent_runner.py), which sets up an environment where four AI agents must collaborate to reconstruct a hidden 2x2 grid. Each cell in the grid has a color and shape, and each agent receives partial information about the grid. The agents must communicate effectively to share their knowledge and reconstruct the complete grid.
@@ -46,34 +75,7 @@ The system utilizes four different AI models, each with distinct capabilities:
    - A model from Zhipu AI
    - Used for Agent 4 in the round-robin sequence
 
-## Game Mechanics
 
-The agents participate in an asymmetric knowledge game where:
-
-1. A hidden 2x2 grid is created with each cell having a color and shape
-2. Each agent receives partial facts about the grid with some overlap and omissions
-3. Agents communicate through a constrained channel with:
-   - Bandwidth limitations (message length capped)
-   - Noise injection (character drop probability)
-   - Special handling for proposal messages
-4. The goal is to reconstruct the complete grid through effective communication
-5. Agents can propose solutions using a specific JSON format
-
-## Communication Channel
-
-The system uses a [`MessageChannel`](multi_agent_runner.py:18) class that:
-- Limits message length to encourage concise communication
-- Introduces noise to simulate real-world communication constraints
-- Allows special proposal messages to bypass noise and bandwidth constraints
-- Maintains a transcript of all communications
-
-## Key Features
-
-- **Emergent Communication**: Agents develop their own shorthand and protocols for efficient information sharing
-- **Role Assignment**: Each agent has a specific role (Schema Guardian, Fact Broadcaster, Consistency Checker, Proposer/Closer)
-- **Quorum System**: Requires multiple confirmations for facts before accepting them as canonical
-- **Confidence Tracking**: Maintains confidence scores for different pieces of information
-- **Adaptive Noise**: Noise levels change throughout the game to encourage protocol formation early and protect closure late
 
 ## Running the System
 
