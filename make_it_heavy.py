@@ -4,6 +4,7 @@ import sys
 from orchestrator import TaskOrchestrator
 
 class OrchestratorCLI:
+    
     def __init__(self):
         self.orchestrator = TaskOrchestrator()
         self.start_time = None

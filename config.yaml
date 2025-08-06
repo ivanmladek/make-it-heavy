@@ -1,6 +1,6 @@
 # OpenRouter API settings
 openrouter:
-  api_key: "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"
+  api_key: "XXXXXX"
   base_url: "https://openrouter.ai/api/v1"
   
   # IMPORTANT: When selecting a model, ensure it has a high context window (200k+ tokens recommended)

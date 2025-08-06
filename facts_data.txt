@@ -1,0 +1,12 @@
+Agent1:A2.S=Circle
+Agent1:A2.C=Yellow
+Agent1:B1.S=Square
+Agent1:B1.C=Blue
+Agent2:A2.S=Circl
+Agent2:A2.C=Yellow
+Agent2:B1.S=Square
+Agent2:B1.C=ellow
+Agent3:A2.S=Circle
+Agent3:A2.C=Yelow
+Agent3:B1.S=Squre
+Agent3:B1.C=Blue
