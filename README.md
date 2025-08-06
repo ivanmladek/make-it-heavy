@@ -55,6 +55,62 @@ Turn 5 → Agent 1 (Model 1)
 
 This continues for 24 turns, giving each agent 6 opportunities to contribute to solving the puzzle.
 
+## Orchestration Flow
+
+```mermaid
+graph TD
+    A[Game Initialization] --> B[Create Hidden Grid]
+    B --> C[Generate Private Facts]
+    C --> D[Initialize Agents & Channel]
+    
+    D --> E[Turn 1: Agent 1]
+    E --> F[Build Prompt with History]
+    F --> G[Agent 1 Responds]
+    G --> H[Parse Claims & Confirmations]
+    H --> I[Update Canonical State]
+    I --> J[Check for Proposals]
+    
+    J --> K[Turn 2: Agent 2]
+    K --> L[Build Prompt with History]
+    L --> M[Agent 2 Responds]
+    M --> N[Parse Claims & Confirmations]
+    N --> O[Update Canonical State]
+    O --> P[Check for Proposals]
+    
+    P --> Q[Turn 3: Agent 3]
+    Q --> R[Build Prompt with History]
+    R --> S[Agent 3 Responds]
+    S --> T[Parse Claims & Confirmations]
+    T --> U[Update Canonical State]
+    U --> V[Check for Proposals]
+    
+    V --> W[Turn 4: Agent 4]
+    W --> X[Build Prompt with History]
+    X --> Y[Agent 4 Responds]
+    Y --> Z[Parse Claims & Confirmations]
+    Z --> AA[Update Canonical State]
+    AA --> AB[Check for Proposals]
+    
+    AB --> AC[Continue Round-Robin]
+    AC --> AD[... Additional Turns ...]
+    
+    AD --> AE{Proposal Valid & Quorum Met?}
+    AE -->|Yes| AF[Score Proposal]
+    AE -->|No| AG[Continue Game Loop]
+    
+    AF --> AH[Update Agent Reliability]
+    AH --> AI[Check for Perfect Score]
+    AI -->|1.0| AJ[End Game Early]
+    AI -->|< 1.0| AK[Continue to Max Turns]
+    
+    AJ --> AL[Generate Final Report]
+    AK --> AL
+    
+    AL --> AM[Display Transcript]
+    AL --> AN[Show Channel Stats]
+    AL --> AO[Present Best Proposal]
+    AL --> AP[Synthesize Report]
+```
 ## AI Models Used
 
 The system utilizes four different AI models, each with distinct capabilities:
